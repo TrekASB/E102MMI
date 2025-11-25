@@ -97,7 +97,7 @@
     let API = null;
     let chart = null;
 
-    // Siste lagrede utvalg, brukes av "Fargelegg objekter" og klikk på kakediagram
+    // Siste lagrede utvalg, brukes av "Fargelegg objekter"
     let lastSelectionByMmi = null;
 
     // Verdier vi bryr oss om
@@ -157,8 +157,7 @@
      *  - selectionByMmi: { key → { modelId → [runtimeIds] } }
      *
      * Ser etter egenskap "MMI" i PropertySet "0_Generell".
-     * "Uten MMI" defineres eksplisitt som alle objekter som IKKE har
-     * MMI ∈ {100, 200, 300, 350, 375, 400}.
+     * Objekter uten gyldig MMI-verdi havner i "noMmi".
      */
     async function getMmiData() {
       if (!API) throw new Error("API ikke tilkoblet.");
@@ -188,11 +187,6 @@
         [NO_MMI_KEY]: {}
       };
 
-      // Alle objekter per modell
-      const allObjectIdsByModel = {};
-      // Objekter som HAR gyldig MMI per modell
-      const hasValidMmiByModel = {};
-
       for (const modelObjects of modelObjectsList) {
         const modelId =
           modelObjects.modelId ||
@@ -205,17 +199,6 @@
         const runtimeIds = objs.map(o => o.id);
         if (!runtimeIds.length) continue;
 
-        if (!allObjectIdsByModel[modelId]) {
-          allObjectIdsByModel[modelId] = new Set();
-        }
-        if (!hasValidMmiByModel[modelId]) {
-          hasValidMmiByModel[modelId] = new Set();
-        }
-
-        for (const id of runtimeIds) {
-          allObjectIdsByModel[modelId].add(id);
-        }
-
         const objectPropsArray = await API.viewer.getObjectProperties(
           modelId,
           runtimeIds
@@ -223,56 +206,51 @@
 
         for (const obj of objectPropsArray) {
           const psets = obj.properties || [];
-          let objMmi = null; // faktisk MMI-verdi for dette objektet (hvis gyldig)
+
+          let assignedMmi = false; // true hvis objektet havner i 100/200/300/350/375/400
 
           for (const pset of psets) {
+            if (assignedMmi) break;
+
+            // Sjekk at vi er i PropertySet "0_Generell"
             const psetNameNorm = normalizeName(pset.name || "");
             if (psetNameNorm !== "0_GENERELL") continue;
 
             const props = pset.properties || [];
             for (const p of props) {
-              const propNameNorm = normalizeName(p.name || "");
+              const propName = p.name || "";
+              const propNameNorm = normalizeName(propName);
 
+              // Se etter egenskap "MMI" (i 0_Generell)
               if (propNameNorm !== "MMI") continue;
 
               const numVal = parseInt(p.value, 10);
               if (VALID_MMI_VALUES.includes(numVal)) {
-                objMmi = numVal;
+                counts[numVal] = (counts[numVal] || 0) + 1;
+
+                const perModel = selectionByMmi[numVal];
+                if (!perModel[modelId]) {
+                  perModel[modelId] = [];
+                }
+                perModel[modelId].push(obj.id); // runtimeId
+
+                assignedMmi = true;
               }
+
+              // Vi bryter uansett ut etter første MMI i 0_Generell
               break;
             }
-            if (objMmi !== null) break;
           }
 
-          if (objMmi !== null) {
-            // Objektet har gyldig MMI (100/200/300/350/375/400)
-            counts[objMmi] = (counts[objMmi] || 0) + 1;
-
-            const perModel = selectionByMmi[objMmi];
-            if (!perModel[modelId]) {
-              perModel[modelId] = [];
-            }
-            perModel[modelId].push(obj.id);
-
-            hasValidMmiByModel[modelId].add(obj.id);
-          }
-          // OBS: vi legger IKKE inn "uten MMI" her – det gjøres etterpå
-        }
-      }
-
-      // Nå beregner vi "Uten MMI" som:
-      // Alle objekter MINUS de som har gyldig MMI
-      for (const modelId of Object.keys(allObjectIdsByModel)) {
-        const allIds = allObjectIdsByModel[modelId];
-        const validIds = hasValidMmiByModel[modelId] || new Set();
-
-        for (const id of allIds) {
-          if (!validIds.has(id)) {
-            if (!selectionByMmi[NO_MMI_KEY][modelId]) {
-              selectionByMmi[NO_MMI_KEY][modelId] = [];
-            }
-            selectionByMmi[NO_MMI_KEY][modelId].push(id);
+          // Hvis objektet ikke fikk gyldig MMI-verdi → inn i "uten MMI"
+          if (!assignedMmi) {
             counts[NO_MMI_KEY] = (counts[NO_MMI_KEY] || 0) + 1;
+
+            const perModelNoMmi = selectionByMmi[NO_MMI_KEY];
+            if (!perModelNoMmi[modelId]) {
+              perModelNoMmi[modelId] = [];
+            }
+            perModelNoMmi[modelId].push(obj.id);
           }
         }
       }
@@ -354,77 +332,6 @@
       }
     }
 
-    // Highlight kun én MMI-gruppe (brukes ved klikk på kakediagram)
-    async function highlightMmiGroup(groupKey) {
-      const statusEl = document.getElementById("status");
-      const errorEl = document.getElementById("error");
-
-      if (!API) {
-        errorEl.textContent = "API er ikke tilkoblet. Kan ikke oppdatere visning.";
-        return;
-      }
-      if (!lastSelectionByMmi) {
-        errorEl.textContent =
-          "Ingen MMI-data er lastet ennå. Trykk først på «Hent fra modell».";
-        return;
-      }
-
-      const perModel = lastSelectionByMmi[groupKey];
-      if (!perModel) {
-        errorEl.textContent = "Fant ingen objekter for valgt MMI-gruppe.";
-        return;
-      }
-
-      const modelObjectIds = [];
-      for (const modelId of Object.keys(perModel)) {
-        const ids = perModel[modelId];
-        if (ids && ids.length) {
-          modelObjectIds.push({
-            modelId,
-            objectRuntimeIds: ids
-          });
-        }
-      }
-
-      errorEl.textContent = "";
-      statusEl.textContent = "Oppdaterer visning for valgt MMI-gruppe…";
-
-      try {
-        // Reset alle først til default-farger
-        await API.viewer.setObjectState(undefined, { color: "reset" });
-
-        if (modelObjectIds.length === 0) {
-          statusEl.textContent = "Ingen objekter med valgt MMI-verdi.";
-          return;
-        }
-
-        const colorString = MMI_COLORS[String(groupKey)] || "rgb(0,0,0)";
-        const rgba = parseRgbToRgba(colorString);
-        if (!rgba) {
-          statusEl.textContent = "Ugyldig fargekonfigurasjon for valgt MMI-gruppe.";
-          return;
-        }
-
-        const selector = { modelObjectIds };
-        await API.viewer.setObjectState(selector, { color: rgba });
-
-        if (groupKey === NO_MMI_KEY) {
-          statusEl.textContent =
-            "Viser kun objekter uten MMI-verdi (andre objekter har default farge).";
-        } else {
-          statusEl.textContent =
-            "Viser kun objekter med MMI = " +
-            groupKey +
-            " (andre objekter har default farge).";
-        }
-      } catch (err) {
-        console.error("Feil ved highlighting:", err);
-        errorEl.textContent =
-          "Feil ved oppdatering av visning: " + (err.message || err);
-        statusEl.textContent = "Kunne ikke oppdatere visning.";
-      }
-    }
-
     // Tegner kakediagram og viser prosent + antall i parentes
     function renderPieChart(counts) {
       const ctx = document.getElementById("mmiChart").getContext("2d");
@@ -432,7 +339,6 @@
       const labels = [];
       const data = [];
       const backgroundColors = [];
-      const groupKeysForLabels = []; // mapping index → MMI-key
 
       let total = 0;
 
@@ -448,7 +354,6 @@
 
           labels.push(label);
           data.push(c);
-          groupKeysForLabels.push(key);
 
           const color = MMI_COLORS[String(key)] || "rgba(0,0,0,0.1)";
           backgroundColors.push(color);
@@ -477,13 +382,8 @@
           ]
         },
         options: {
-          // Klikk på kakediagrammet → vis kun den MMI-gruppen i modellen
-          onClick: async (event, elements) => {
-            if (!elements || !elements.length) return;
-            const index = elements[0].index;
-            const groupKey = groupKeysForLabels[index];
-            await highlightMmiGroup(groupKey);
-          },
+          // Deaktiver klikk-håndtering på selve kakediagrammet
+          onClick: () => {},
           plugins: {
             tooltip: {
               callbacks: {
@@ -493,6 +393,7 @@
                   const percent = total > 0
                     ? ((value / total) * 100).toFixed(1)
                     : 0;
+                  // Format: 89.8 % (452 objekter)
                   return `${label}: ${percent} % (${value} objekter)`;
                 }
               }
@@ -508,6 +409,7 @@
                     const percent = total > 0
                       ? ((value / total) * 100).toFixed(1)
                       : 0;
+                    // Format i legend: 100 – 89.8 % (452 objekter)
                     return {
                       text: `${label} – ${percent} % (${value} objekter)`,
                       fillStyle: dataSet.backgroundColor[i],
@@ -526,9 +428,7 @@
 
       document.getElementById("status").textContent =
         "MMI-fordeling (100/200/300/350/375/400) + objekter uten MMI, " +
-        "basert på MMI i 0_Generell.\n" +
-        "Klikk på et kakestykke for å vise kun den MMI-gruppen i modellen, " +
-        "eller bruk «Fargelegg objekter» for å fargelegge alle.";
+        "basert på MMI i 0_Generell. Bruk «Fargelegg objekter» for å oppdatere farger i modellen.";
     }
 
     async function loadChart() {
@@ -540,8 +440,9 @@
 
       try {
         const { counts, selectionByMmi } = await getMmiData();
-        lastSelectionByMmi = selectionByMmi;
+        lastSelectionByMmi = selectionByMmi; // lagre for "Fargelegg objekter"
 
+        // Kun oppdatere diagrammet her – ingen farger i modellen ennå
         renderPieChart(counts);
       } catch (err) {
         console.error(err);
@@ -565,6 +466,7 @@
         "Fargelegging oppdatert basert på sist innleste MMI-data.";
     });
 
+    // Tilbakestill farger-knapp
     document.getElementById("resetColorsButton").addEventListener("click", resetColors);
 
     // Init – koble til Workspace
