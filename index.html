@@ -97,7 +97,7 @@
     let API = null;
     let chart = null;
 
-    // Siste lagrede utvalg, brukes av "Fargelegg objekter" og klikk i diagrammet
+    // Siste lagrede utvalg, brukes av "Fargelegg objekter" og klikk i diagram/legend
     let lastSelectionByMmi = null;
 
     // Verdier vi bryr oss om
@@ -415,8 +415,8 @@
           ]
         },
         options: {
+          // Klikk i selve kaken
           onClick: async (evt, elements) => {
-            // Klikk i kakediagrammet → isoler valgt MMI-verdi i modellen
             if (!elements.length || !lastSelectionByMmi) return;
 
             const index = elements[0].index;
@@ -447,14 +447,34 @@
             },
             legend: {
               position: "bottom",
+              // Klikk i legend → samme som klikk i kaken
+              onClick: async (evt, legendItem, legend) => {
+                if (!lastSelectionByMmi) return;
+
+                // legendItem.text er f.eks: "100 – 45.3 % (123 objekter)"
+                const fullText = legendItem.text || "";
+                const rawLabel = fullText.split("–")[0].trim();
+
+                let key;
+                if (rawLabel === "Uten MMI") {
+                  key = NO_MMI_KEY;
+                } else {
+                  key = parseInt(rawLabel, 10);
+                }
+
+                await applyMmiColors(lastSelectionByMmi, key);
+              },
               labels: {
                 generateLabels(chartInstance) {
                   const dataSet = chartInstance.data.datasets[0];
                   const labels = chartInstance.data.labels || [];
+                  const values = dataSet.data || [];
+                  const totalLocal = values.reduce((a, b) => a + b, 0);
+
                   return labels.map((label, i) => {
-                    const value = dataSet.data[i];
-                    const percent = total > 0
-                      ? ((value / total) * 100).toFixed(1)
+                    const value = values[i];
+                    const percent = totalLocal > 0
+                      ? ((value / totalLocal) * 100).toFixed(1)
                       : 0;
                     // Format i legend: 100 – 89.8 % (452 objekter)
                     return {
@@ -476,7 +496,7 @@
       document.getElementById("status").textContent =
         "MMI-fordeling (100/200/300/350/400) + objekter uten MMI, " +
         "basert på MMI i 0_Generell. " +
-        "Klikk i kakediagrammet for å vise kun én MMI-verdi i modellen, " +
+        "Klikk i kakediagrammet eller i legend for å vise kun én MMI-verdi i modellen, " +
         "eller bruk «Fargelegg objekter» for å vise alle verdier.";
     }
 
@@ -489,7 +509,7 @@
 
       try {
         const { counts, selectionByMmi } = await getMmiData();
-        lastSelectionByMmi = selectionByMmi; // lagre for "Fargelegg objekter" og klikk i diagrammet
+        lastSelectionByMmi = selectionByMmi; // lagre for "Fargelegg objekter" og klikk i diagram/legend
 
         // Kun oppdatere diagrammet her – ingen farger i modellen ennå
         renderPieChart(counts);
