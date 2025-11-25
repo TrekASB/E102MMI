@@ -155,8 +155,10 @@
      *  - counts: antall objekter per MMI-verdi + uten MMI
      *  - selectionByMmi: { key → { modelId → [runtimeIds] } }
      *
-     * Ser etter egenskap "MMI" i PropertySet "0_Generell".
-     * Objekter uten gyldig MMI-verdi havner i "noMmi".
+     * Vi ser etter egenskap "MMI" i ALLE PropertySets.
+     * Hvert objekt havner i nøyaktig én gruppe:
+     *   - MMI = 100/200/300/350/400  → den gruppen
+     *   - ellers                      → "Uten MMI"
      */
     async function getMmiData() {
       if (!API) throw new Error("API ikke tilkoblet.");
@@ -204,51 +206,39 @@
         for (const obj of objectPropsArray) {
           const psets = obj.properties || [];
 
-          let assignedMmi = false; // true hvis objektet havner i 100/200/300/350/400
+          // Finn MMI-verdi én gang per objekt
+          let detectedMmi = null;
 
           for (const pset of psets) {
-            if (assignedMmi) break;
-
-            // Sjekk at vi er i PropertySet "0_Generell"
-            const psetNameNorm = normalizeName(pset.name || "");
-            if (psetNameNorm !== "0_GENERELL") continue;
-
             const props = pset.properties || [];
             for (const p of props) {
-              const propName = p.name || "";
-              const propNameNorm = normalizeName(propName);
-
-              // Se etter egenskap "MMI" (i 0_Generell)
+              const propNameNorm = normalizeName(p.name || "");
               if (propNameNorm !== "MMI") continue;
 
               const numVal = parseInt(p.value, 10);
-              if (VALID_MMI_VALUES.includes(numVal)) {
-                counts[numVal] = (counts[numVal] || 0) + 1;
-
-                const perModel = selectionByMmi[numVal];
-                if (!perModel[modelId]) {
-                  perModel[modelId] = [];
-                }
-                perModel[modelId].push(obj.id); // runtimeId
-
-                assignedMmi = true;
+              if (!isNaN(numVal)) {
+                detectedMmi = numVal;
+                break;
               }
-
-              // Vi bryter uansett ut etter første MMI i 0_Generell
-              break;
             }
+            if (detectedMmi !== null) break;
           }
 
-          // Hvis objektet ikke fikk gyldig MMI-verdi → inn i "uten MMI"
-          if (!assignedMmi) {
-            counts[NO_MMI_KEY] = (counts[NO_MMI_KEY] || 0) + 1;
-
-            const perModelNoMmi = selectionByMmi[NO_MMI_KEY];
-            if (!perModelNoMmi[modelId]) {
-              perModelNoMmi[modelId] = [];
-            }
-            perModelNoMmi[modelId].push(obj.id);
+          // Bestem hvilken gruppe objektet havner i
+          let groupKey;
+          if (VALID_MMI_VALUES.includes(detectedMmi)) {
+            groupKey = detectedMmi;
+          } else {
+            groupKey = NO_MMI_KEY;
           }
+
+          counts[groupKey] = (counts[groupKey] || 0) + 1;
+
+          const perModel = selectionByMmi[groupKey];
+          if (!perModel[modelId]) {
+            perModel[modelId] = [];
+          }
+          perModel[modelId].push(obj.id); // runtimeId
         }
       }
 
@@ -451,7 +441,6 @@
               onClick: async (evt, legendItem, legend) => {
                 if (!lastSelectionByMmi) return;
 
-                // legendItem.text er f.eks: "100 – 45.3 % (123 objekter)"
                 const fullText = legendItem.text || "";
                 const rawLabel = fullText.split("–")[0].trim();
 
@@ -495,7 +484,7 @@
 
       document.getElementById("status").textContent =
         "MMI-fordeling (100/200/300/350/400) + objekter uten MMI, " +
-        "basert på MMI i 0_Generell. " +
+        "basert på MMI-egenskapen. " +
         "Klikk i kakediagrammet eller i legend for å vise kun én MMI-verdi i modellen, " +
         "eller bruk «Fargelegg objekter» for å vise alle verdier.";
     }
@@ -505,7 +494,7 @@
       const errorEl = document.getElementById("error");
       errorEl.textContent = "";
       statusEl.textContent =
-        "Henter objekter og leser MMI fra 0_Generell (100/200/300/350/400) + objekter uten MMI…";
+        "Henter objekter og leser MMI (100/200/300/350/400) + objekter uten MMI…";
 
       try {
         const { counts, selectionByMmi } = await getMmiData();
