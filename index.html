@@ -82,6 +82,7 @@
     <div class="title">MMI-kakediagram (MMI fra 0_Generell)</div>
     <button id="reloadButton">Hent fra modell</button>
     <button id="colorizeButton">Fargelegg objekter</button>
+    <button id="resetButton">Nullstill modell</button>
   </header>
 
   <main>
@@ -96,7 +97,7 @@
     let API = null;
     let chart = null;
 
-    // Siste lagrede utvalg, brukes av "Fargelegg objekter"
+    // Siste lagrede utvalg, brukes av "Fargelegg objekter" og klikk i diagrammet
     let lastSelectionByMmi = null;
 
     // Verdier vi bryr oss om
@@ -256,47 +257,107 @@
       return { counts, selectionByMmi };
     }
 
+    // Nullstill modellfarger til originaltilstand
+    async function resetModelColors() {
+      if (!API) return;
+      const statusEl = document.getElementById("status");
+      statusEl.textContent = "Nullstiller modellfarger…";
+
+      try {
+        await API.viewer.setObjectState(undefined, { color: "reset" });
+        statusEl.textContent = "Modellen er nullstilt til opprinnelige farger.";
+      } catch (err) {
+        console.error("Feil ved nullstilling:", err);
+        document.getElementById("error").textContent =
+          "Feil ved nullstilling av modellen: " + (err.message || err);
+      }
+    }
+
     // Fargelegg objekter i viseren etter MMI-verdi (inkl. uten MMI)
-    async function applyMmiColors(selectionByMmi) {
+    // Hvis selectedKey er satt → fargelegg kun denne MMI-gruppen, andre går tilbake til originalfarger
+    async function applyMmiColors(selectionByMmi, selectedKey = null) {
       if (!API) throw new Error("API ikke tilkoblet.");
 
       const statusEl = document.getElementById("status");
-      statusEl.textContent = "Fargelegger objekter i modellen…";
+      statusEl.textContent = selectedKey == null
+        ? "Fargelegger alle MMI-verdier i modellen…"
+        : `Viser kun MMI=${selectedKey === NO_MMI_KEY ? "Uten MMI" : selectedKey} i modellen…`;
 
       try {
-        // Reset farger først
+        // Først resetter vi alt til originalfarger
         await API.viewer.setObjectState(undefined, { color: "reset" });
 
-        // Fargelegg per MMI-gruppe + uten MMI
-        for (const key of ALL_GROUP_KEYS) {
-          const perModel = selectionByMmi[key];
-          if (!perModel) continue;
+        // Hvis vi skal vise ALLE verdier
+        if (selectedKey == null) {
+          for (const key of ALL_GROUP_KEYS) {
+            const perModel = selectionByMmi[key];
+            if (!perModel) continue;
 
-          const modelObjectIds = [];
-          for (const modelId of Object.keys(perModel)) {
-            const ids = perModel[modelId];
-            if (ids && ids.length) {
-              modelObjectIds.push({
-                modelId,
-                objectRuntimeIds: ids
-              });
+            const modelObjectIds = [];
+            for (const modelId of Object.keys(perModel)) {
+              const ids = perModel[modelId];
+              if (ids && ids.length) {
+                modelObjectIds.push({
+                  modelId,
+                  objectRuntimeIds: ids
+                });
+              }
             }
+
+            if (!modelObjectIds.length) continue;
+
+            const colorString = MMI_COLORS[String(key)] || "rgb(0,0,0)";
+            const rgba = parseRgbToRgba(colorString);
+            if (!rgba) continue;
+
+            const selector = { modelObjectIds };
+
+            await API.viewer.setObjectState(selector, {
+              color: rgba
+            });
           }
 
-          if (!modelObjectIds.length) continue;
-
-          const colorString = MMI_COLORS[String(key)] || "rgb(0,0,0)";
-          const rgba = parseRgbToRgba(colorString);
-          if (!rgba) continue;
-
-          const selector = { modelObjectIds };
-
-          await API.viewer.setObjectState(selector, {
-            color: rgba
-          });
+          statusEl.textContent = "Fargelegging i modellen er oppdatert for alle MMI-verdier.";
+          return;
         }
 
-        statusEl.textContent = "Fargelegging i modellen er oppdatert.";
+        // Hvis vi kun skal vise EN MMI-verdi (eller Uten MMI)
+        const perModel = selectionByMmi[selectedKey];
+        if (!perModel) {
+          statusEl.textContent = "Ingen objekter for valgt MMI-verdi.";
+          return;
+        }
+
+        const modelObjectIds = [];
+        for (const modelId of Object.keys(perModel)) {
+          const ids = perModel[modelId];
+          if (ids && ids.length) {
+            modelObjectIds.push({
+              modelId,
+              objectRuntimeIds: ids
+            });
+          }
+        }
+
+        if (!modelObjectIds.length) {
+          statusEl.textContent = "Ingen objekter for valgt MMI-verdi.";
+          return;
+        }
+
+        const colorString = MMI_COLORS[String(selectedKey)] || "rgb(0,0,0)";
+        const rgba = parseRgbToRgba(colorString);
+        if (!rgba) {
+          statusEl.textContent = "Kunne ikke bestemme farge for valgt MMI-verdi.";
+          return;
+        }
+
+        const selector = { modelObjectIds };
+        await API.viewer.setObjectState(selector, {
+          color: rgba
+        });
+
+        statusEl.textContent =
+          `Viser kun MMI=${selectedKey === NO_MMI_KEY ? "Uten MMI" : selectedKey} i modellen (andre har originalfarger).`;
       } catch (err) {
         console.error("Feil ved fargelegging:", err);
         document.getElementById("error").textContent =
@@ -354,6 +415,22 @@
           ]
         },
         options: {
+          onClick: async (evt, elements) => {
+            // Klikk i kakediagrammet → isoler valgt MMI-verdi i modellen
+            if (!elements.length || !lastSelectionByMmi) return;
+
+            const index = elements[0].index;
+            const label = chart.data.labels[index];
+
+            let key;
+            if (label === "Uten MMI") {
+              key = NO_MMI_KEY;
+            } else {
+              key = parseInt(label, 10);
+            }
+
+            await applyMmiColors(lastSelectionByMmi, key);
+          },
           plugins: {
             tooltip: {
               callbacks: {
@@ -398,7 +475,9 @@
 
       document.getElementById("status").textContent =
         "MMI-fordeling (100/200/300/350/400) + objekter uten MMI, " +
-        "basert på MMI i 0_Generell. Bruk «Fargelegg objekter» for å oppdatere farger i modellen.";
+        "basert på MMI i 0_Generell. " +
+        "Klikk i kakediagrammet for å vise kun én MMI-verdi i modellen, " +
+        "eller bruk «Fargelegg objekter» for å vise alle verdier.";
     }
 
     async function loadChart() {
@@ -410,7 +489,7 @@
 
       try {
         const { counts, selectionByMmi } = await getMmiData();
-        lastSelectionByMmi = selectionByMmi; // lagre for "Fargelegg objekter"
+        lastSelectionByMmi = selectionByMmi; // lagre for "Fargelegg objekter" og klikk i diagrammet
 
         // Kun oppdatere diagrammet her – ingen farger i modellen ennå
         renderPieChart(counts);
@@ -434,6 +513,10 @@
       await applyMmiColors(lastSelectionByMmi);
       document.getElementById("status").textContent =
         "Fargelegging oppdatert basert på sist innleste MMI-data.";
+    });
+
+    document.getElementById("resetButton").addEventListener("click", async () => {
+      await resetModelColors();
     });
 
     // Init – koble til Workspace
