@@ -100,8 +100,8 @@
     // Siste lagrede utvalg, brukes av "Fargelegg objekter" og klikk i diagram/legend
     let lastSelectionByMmi = null;
 
-    // Verdier vi bryr oss om (inkludert 305 som du nevnte)
-    const VALID_MMI_VALUES = [100, 200, 300, 305, 350, 400];
+    // Verdier vi bryr oss om (100, 200, 300, 350, 400)
+    const VALID_MMI_VALUES = [100, 200, 300, 350, 400];
 
     // Egen nøkkel for objekter uten MMI-verdi
     const NO_MMI_KEY = "noMmi";
@@ -111,7 +111,6 @@
       "100": "rgb(190, 40, 35)",    // 100
       "200": "rgb(230, 150, 55)",   // 200
       "300": "rgb(250, 240, 80)",   // 300
-      "305": "rgb(250, 240, 80)",   // 305 – samme som 300, kan endres
       "350": "rgb(185, 175, 60)",   // 350
       "400": "rgb(55, 130, 70)",    // 400
       "noMmi": "rgb(254, 2, 225)"   // objekter uten MMI-verdi
@@ -157,8 +156,8 @@
      *  - counts: antall objekter per MMI-verdi + uten MMI
      *  - selectionByMmi: { key → { modelId → [runtimeIds] } }
      *
-     * Bruker kun PropertySet "0_Generell" og leter der etter en property
-     * med verdi 100 / 200 / 300 / 305 / 350 / 400 (uavhengig av property-navn).
+     * Bruker kun egenskap "MMI" under PropertySet "0_Generell".
+     * Hvert objekt havner i nøyaktig én gruppe.
      */
     async function getMmiData() {
       if (!API) throw new Error("API ikke tilkoblet.");
@@ -171,7 +170,6 @@
         100: 0,
         200: 0,
         300: 0,
-        305: 0,
         350: 0,
         400: 0,
         [NO_MMI_KEY]: 0
@@ -182,7 +180,6 @@
         100: {},
         200: {},
         300: {},
-        305: {},
         350: {},
         400: {},
         [NO_MMI_KEY]: {}
@@ -208,7 +205,7 @@
         for (const obj of objectPropsArray) {
           const psets = obj.properties || [];
 
-          // Finn MMI-verdi én gang per objekt – ved å se i Pset 0_Generell
+          // Finn MMI-verdi én gang per objekt – fra Pset "0_Generell" og property "MMI"
           let detectedMmi = null;
 
           for (const pset of psets) {
@@ -217,15 +214,14 @@
 
             const props = pset.properties || [];
             for (const p of props) {
-              // Vi bryr oss ikke om navnet – bare verdien
-              const rawVal = p.value;
-              if (rawVal === null || rawVal === undefined) continue;
+              const propNameNorm = normalizeName(p.name || "");
+              if (propNameNorm !== "MMI") continue;
 
-              const numVal = parseInt(rawVal as any, 10);
-              if (!isNaN(numVal) && VALID_MMI_VALUES.includes(numVal)) {
+              const numVal = parseInt(p.value, 10);
+              if (!isNaN(numVal)) {
                 detectedMmi = numVal;
-                break;
               }
+              break;
             }
             if (detectedMmi !== null) break;
           }
@@ -250,21 +246,6 @@
 
       console.log("MMI counts:", counts);
       console.log("MMI selectionByMmi:", selectionByMmi);
-
-      const total =
-        (counts[100] || 0) +
-        (counts[200] || 0) +
-        (counts[300] || 0) +
-        (counts[305] || 0) +
-        (counts[350] || 0) +
-        (counts[400] || 0) +
-        (counts[NO_MMI_KEY] || 0);
-
-      if (total > 0 && counts[NO_MMI_KEY] === total) {
-        document.getElementById("status").textContent =
-          "Alle objekter havnet i «Uten MMI» basert på det vi fant i 0_Generell. Sjekk gjerne dev-konsollen for detaljer (MMI counts-logg).";
-      }
-
       return { counts, selectionByMmi };
     }
 
@@ -451,7 +432,6 @@
                   const percent = total > 0
                     ? ((value / total) * 100).toFixed(1)
                     : 0;
-                  // Format: 89.8 % (452 objekter)
                   return `${label}: ${percent} % (${value} objekter)`;
                 }
               }
@@ -486,7 +466,6 @@
                     const percent = totalLocal > 0
                       ? ((value / totalLocal) * 100).toFixed(1)
                       : 0;
-                    // Format i legend: 100 – 89.8 % (452 objekter)
                     return {
                       text: `${label} – ${percent} % (${value} objekter)`,
                       fillStyle: dataSet.backgroundColor[i],
@@ -504,8 +483,8 @@
       });
 
       document.getElementById("status").textContent =
-        "MMI-fordeling (100/200/300/305/350/400) + objekter uten MMI, " +
-        "basert på verdier funnet i 0_Generell. " +
+        "MMI-fordeling (100/200/300/350/400) + objekter uten MMI, " +
+        "basert på egenskapen MMI i 0_Generell. " +
         "Klikk i kakediagrammet eller i legend for å vise kun én MMI-verdi i modellen, " +
         "eller bruk «Fargelegg objekter» for å vise alle verdier.";
     }
@@ -515,11 +494,11 @@
       const errorEl = document.getElementById("error");
       errorEl.textContent = "";
       statusEl.textContent =
-        "Henter objekter og leser MMI fra 0_Generell…";
+        "Henter objekter og leser MMI fra 0_Generell (100/200/300/350/400) + objekter uten MMI…";
 
       try {
         const { counts, selectionByMmi } = await getMmiData();
-        lastSelectionByMmi = selectionByMmi; // lagre for "Fargelegg objekter" og klikk i diagram/legend
+        lastSelectionByMmi = selectionByMmi;
 
         renderPieChart(counts);
       } catch (err) {
