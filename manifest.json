@@ -1,7 +1,8 @@
 {
   "title": "MMI-kakediagram",
-  "icon": "https://trekasb.github.io/TCGGxt_3/icon.png",
-  "url": "https://trekasb.github.io/TCGGxt_3/index.html",
+  "icon": "https://trekasb.github.io/E102MMI/icon.png",
+  "url": "https://trekasb.github.io/E102MMI/index.html",
   "description": "Viser \"MMI fordeling i modell\" fra Pset 0_Generell.",
   "enabled": true
 }
+
