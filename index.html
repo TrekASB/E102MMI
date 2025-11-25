@@ -122,6 +122,7 @@
     function normalizeName(name) {
       return (name || "")
         .toString()
+        .trim()
         .toUpperCase()
         .replace(/[\s\-]+/g, "_");
     }
@@ -155,8 +156,10 @@
      *  - counts: antall objekter per MMI-verdi + uten MMI
      *  - selectionByMmi: { key → { modelId → [runtimeIds] } }
      *
-     * Bruker kun egenskap "MMI" under PropertySet "0_Generell".
-     * Hvert objekt havner i nøyaktig én gruppe.
+     * Vi ser etter egenskap "MMI" i ALLE PropertySets.
+     * Hvert objekt havner i nøyaktig én gruppe:
+     *   - MMI = 100/200/300/350/400  → den gruppen
+     *   - ellers                      → "Uten MMI"
      */
     async function getMmiData() {
       if (!API) throw new Error("API ikke tilkoblet.");
@@ -204,13 +207,10 @@
         for (const obj of objectPropsArray) {
           const psets = obj.properties || [];
 
-          // Finn MMI-verdi én gang per objekt – kun fra Pset "0_Generell"
+          // Finn MMI-verdi én gang per objekt – tar første egenskap som heter "MMI"
           let detectedMmi = null;
 
           for (const pset of psets) {
-            const setNameNorm = normalizeName(pset.set || pset.name || "");
-            if (setNameNorm !== "0_GENERELL") continue;
-
             const props = pset.properties || [];
             for (const p of props) {
               const propNameNorm = normalizeName(p.name || "");
@@ -245,6 +245,21 @@
 
       console.log("MMI counts:", counts);
       console.log("MMI selectionByMmi:", selectionByMmi);
+
+      // Litt ekstra hjelp: hvis ALT havner i Uten MMI, gi en tydelig status
+      const total =
+        counts[100] +
+        counts[200] +
+        counts[300] +
+        counts[350] +
+        counts[400] +
+        counts[NO_MMI_KEY];
+
+      if (counts[NO_MMI_KEY] === total) {
+        document.getElementById("status").textContent =
+          "Fant ingen MMI-verdier på objektene (alle havner i Uten MMI). Sjekk at egenskapen heter «MMI».";
+      }
+
       return { counts, selectionByMmi };
     }
 
@@ -485,7 +500,7 @@
 
       document.getElementById("status").textContent =
         "MMI-fordeling (100/200/300/350/400) + objekter uten MMI, " +
-        "basert på egenskapen MMI i 0_Generell. " +
+        "basert på egenskapen MMI (i ditt tilfelle under 0_Generell). " +
         "Klikk i kakediagrammet eller i legend for å vise kun én MMI-verdi i modellen, " +
         "eller bruk «Fargelegg objekter» for å vise alle verdier.";
     }
@@ -495,7 +510,7 @@
       const errorEl = document.getElementById("error");
       errorEl.textContent = "";
       statusEl.textContent =
-        "Henter objekter og leser MMI fra 0_Generell (100/200/300/350/400) + objekter uten MMI…";
+        "Henter objekter og leser MMI (100/200/300/350/400) + objekter uten MMI…";
 
       try {
         const { counts, selectionByMmi } = await getMmiData();
