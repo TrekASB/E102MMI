@@ -1,0 +1,452 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <title>MMI-kakediagram</title>
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+
+  <!-- Trimble Connect Workspace API -->
+  <script src="https://components.connect.trimble.com/trimble-connect-workspace-api/index.js"></script>
+
+  <!-- Chart.js -->
+  <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
+
+  <style>
+    body {
+      margin: 0;
+      padding: 0;
+      font-family: system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+      display: flex;
+      flex-direction: column;
+      height: 100vh;
+    }
+
+    header {
+      padding: 8px 12px;
+      border-bottom: 1px solid #ddd;
+      font-size: 14px;
+      display: flex;
+      align-items: center;
+      gap: 10px;
+    }
+
+    header .title {
+      font-weight: 600;
+      margin-right: auto;
+    }
+
+    header button {
+      font-size: 13px;
+      padding: 4px 8px;
+      cursor: pointer;
+    }
+
+    main {
+      flex: 1;
+      display: flex;
+      flex-direction: column;
+      padding: 12px;
+      box-sizing: border-box;
+      gap: 8px;
+    }
+
+    #status {
+      font-size: 13px;
+      opacity: 0.9;
+    }
+
+    #error {
+      font-size: 13px;
+      color: #b00020;
+      min-height: 18px;
+    }
+
+    #chartContainer {
+      flex: 1;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      min-height: 220px;
+    }
+
+    canvas {
+      max-width: 480px;
+      max-height: 480px;
+      width: 100%;
+      height: auto;
+    }
+  </style>
+</head>
+<body>
+  <header>
+    <div class="title">MMI-kakediagram (MMI fra 0_Generell)</div>
+    <button id="reloadButton">Hent fra modell</button>
+    <button id="colorizeButton">Fargelegg objekter</button>
+  </header>
+
+  <main>
+    <div id="status">Kobler til Trimble Connect…</div>
+    <div id="chartContainer">
+      <canvas id="mmiChart"></canvas>
+    </div>
+    <div id="error"></div>
+  </main>
+
+  <script>
+    let API = null;
+    let chart = null;
+
+    // Siste lagrede utvalg, brukes av "Fargelegg objekter"
+    let lastSelectionByMmi = null;
+
+    // Verdier vi bryr oss om
+    const VALID_MMI_VALUES = [100, 200, 300, 350, 400];
+
+    // Egen nøkkel for objekter uten MMI-verdi
+    const NO_MMI_KEY = "noMmi";
+
+    // Farger (brukes både i diagram og i modellen)
+    const MMI_COLORS = {
+      "100": "rgb(190, 40, 35)",    // 100
+      "200": "rgb(230, 150, 55)",   // 200
+      "300": "rgb(250, 240, 80)",   // 300
+      "350": "rgb(185, 175, 60)",   // 350
+      "400": "rgb(55, 130, 70)",    // 400
+      "noMmi": "rgb(254, 2, 225)"   // objekter uten MMI-verdi
+    };
+
+    // Alle grupper (inkludert "uten MMI")
+    const ALL_GROUP_KEYS = [...VALID_MMI_VALUES, NO_MMI_KEY];
+
+    function normalizeName(name) {
+      return (name || "")
+        .toString()
+        .toUpperCase()
+        .replace(/[\s\-]+/g, "_");
+    }
+
+    // Parse "rgb(r,g,b)" → {r,g,b,a}
+    function parseRgbToRgba(rgbString) {
+      if (!rgbString) return null;
+      const match = rgbString.match(/rgb\s*\(\s*(\d+)\s*,\s*(\d+)\s*,\s*(\d+)\s*\)/i);
+      if (!match) return null;
+      return {
+        r: parseInt(match[1], 10),
+        g: parseInt(match[2], 10),
+        b: parseInt(match[3], 10),
+        a: 255
+      };
+    }
+
+    async function connectToWorkspace() {
+      API = await TrimbleConnectWorkspace.connect(
+        window.parent,
+        (event, data) => {
+          console.log("TC event:", event, data);
+        },
+        30000
+      );
+      document.getElementById("status").textContent = "Tilkoblet. Klar.";
+    }
+
+    /**
+     * Leser alle lastede objekter og henter:
+     *  - counts: antall objekter per MMI-verdi + uten MMI
+     *  - selectionByMmi: { key → { modelId → [runtimeIds] } }
+     *
+     * Ser etter egenskap "MMI" i PropertySet "0_Generell".
+     * Objekter uten gyldig MMI-verdi havner i "noMmi".
+     */
+    async function getMmiData() {
+      if (!API) throw new Error("API ikke tilkoblet.");
+
+      const modelObjectsList = await API.viewer.getObjects();
+      console.log("getObjects() →", modelObjectsList);
+
+      // Init antall
+      const counts = {
+        100: 0,
+        200: 0,
+        300: 0,
+        350: 0,
+        400: 0,
+        [NO_MMI_KEY]: 0
+      };
+
+      // For fargelegging: per MMI → per modelId → liste med runtimeIds
+      const selectionByMmi = {
+        100: {},
+        200: {},
+        300: {},
+        350: {},
+        400: {},
+        [NO_MMI_KEY]: {}
+      };
+
+      for (const modelObjects of modelObjectsList) {
+        const modelId =
+          modelObjects.modelId ||
+          modelObjects.modelid ||
+          modelObjects["model Id"];
+
+        const objs = modelObjects.objects || [];
+        if (!modelId || !objs.length) continue;
+
+        const runtimeIds = objs.map(o => o.id);
+        if (!runtimeIds.length) continue;
+
+        const objectPropsArray = await API.viewer.getObjectProperties(
+          modelId,
+          runtimeIds
+        );
+
+        for (const obj of objectPropsArray) {
+          const psets = obj.properties || [];
+
+          let assignedMmi = false; // true hvis objektet havner i 100/200/300/350/400
+
+          for (const pset of psets) {
+            if (assignedMmi) break;
+
+            // Sjekk at vi er i PropertySet "0_Generell"
+            const psetNameNorm = normalizeName(pset.name || "");
+            if (psetNameNorm !== "0_GENERELL") continue;
+
+            const props = pset.properties || [];
+            for (const p of props) {
+              const propName = p.name || "";
+              const propNameNorm = normalizeName(propName);
+
+              // Se etter egenskap "MMI" (i 0_Generell)
+              if (propNameNorm !== "MMI") continue;
+
+              const numVal = parseInt(p.value, 10);
+              if (VALID_MMI_VALUES.includes(numVal)) {
+                counts[numVal] = (counts[numVal] || 0) + 1;
+
+                const perModel = selectionByMmi[numVal];
+                if (!perModel[modelId]) {
+                  perModel[modelId] = [];
+                }
+                perModel[modelId].push(obj.id); // runtimeId
+
+                assignedMmi = true;
+              }
+
+              // Vi bryter uansett ut etter første MMI i 0_Generell
+              break;
+            }
+          }
+
+          // Hvis objektet ikke fikk gyldig MMI-verdi → inn i "uten MMI"
+          if (!assignedMmi) {
+            counts[NO_MMI_KEY] = (counts[NO_MMI_KEY] || 0) + 1;
+
+            const perModelNoMmi = selectionByMmi[NO_MMI_KEY];
+            if (!perModelNoMmi[modelId]) {
+              perModelNoMmi[modelId] = [];
+            }
+            perModelNoMmi[modelId].push(obj.id);
+          }
+        }
+      }
+
+      console.log("MMI counts:", counts);
+      console.log("MMI selectionByMmi:", selectionByMmi);
+      return { counts, selectionByMmi };
+    }
+
+    // Fargelegg objekter i viseren etter MMI-verdi (inkl. uten MMI)
+    async function applyMmiColors(selectionByMmi) {
+      if (!API) throw new Error("API ikke tilkoblet.");
+
+      const statusEl = document.getElementById("status");
+      statusEl.textContent = "Fargelegger objekter i modellen…";
+
+      try {
+        // Reset farger først
+        await API.viewer.setObjectState(undefined, { color: "reset" });
+
+        // Fargelegg per MMI-gruppe + uten MMI
+        for (const key of ALL_GROUP_KEYS) {
+          const perModel = selectionByMmi[key];
+          if (!perModel) continue;
+
+          const modelObjectIds = [];
+          for (const modelId of Object.keys(perModel)) {
+            const ids = perModel[modelId];
+            if (ids && ids.length) {
+              modelObjectIds.push({
+                modelId,
+                objectRuntimeIds: ids
+              });
+            }
+          }
+
+          if (!modelObjectIds.length) continue;
+
+          const colorString = MMI_COLORS[String(key)] || "rgb(0,0,0)";
+          const rgba = parseRgbToRgba(colorString);
+          if (!rgba) continue;
+
+          const selector = { modelObjectIds };
+
+          await API.viewer.setObjectState(selector, {
+            color: rgba
+          });
+        }
+
+        statusEl.textContent = "Fargelegging i modellen er oppdatert.";
+      } catch (err) {
+        console.error("Feil ved fargelegging:", err);
+        document.getElementById("error").textContent =
+          "Feil ved fargelegging av objekter: " + (err.message || err);
+      }
+    }
+
+    // Tegner kakediagram og viser prosent + antall i parentes
+    function renderPieChart(counts) {
+      const ctx = document.getElementById("mmiChart").getContext("2d");
+
+      const labels = [];
+      const data = [];
+      const backgroundColors = [];
+
+      let total = 0;
+
+      for (const key of ALL_GROUP_KEYS) {
+        const c = counts[key] || 0;
+        if (c > 0) {
+          let label;
+          if (key === NO_MMI_KEY) {
+            label = "Uten MMI";
+          } else {
+            label = String(key);
+          }
+
+          labels.push(label);
+          data.push(c);
+
+          const color = MMI_COLORS[String(key)] || "rgba(0,0,0,0.1)";
+          backgroundColors.push(color);
+
+          total += c;
+        }
+      }
+
+      if (chart) chart.destroy();
+
+      if (labels.length === 0) {
+        document.getElementById("status").textContent =
+          "Fant ingen objekter i modellen.";
+        return;
+      }
+
+      chart = new Chart(ctx, {
+        type: "pie",
+        data: {
+          labels,
+          datasets: [
+            {
+              data,
+              backgroundColor: backgroundColors
+            }
+          ]
+        },
+        options: {
+          plugins: {
+            tooltip: {
+              callbacks: {
+                label: function (context) {
+                  const label = context.label || "";
+                  const value = context.parsed || 0;
+                  const percent = total > 0
+                    ? ((value / total) * 100).toFixed(1)
+                    : 0;
+                  // Format: 89.8 % (452 objekter)
+                  return `${label}: ${percent} % (${value} objekter)`;
+                }
+              }
+            },
+            legend: {
+              position: "bottom",
+              labels: {
+                generateLabels(chartInstance) {
+                  const dataSet = chartInstance.data.datasets[0];
+                  const labels = chartInstance.data.labels || [];
+                  return labels.map((label, i) => {
+                    const value = dataSet.data[i];
+                    const percent = total > 0
+                      ? ((value / total) * 100).toFixed(1)
+                      : 0;
+                    // Format i legend: 100 – 89.8 % (452 objekter)
+                    return {
+                      text: `${label} – ${percent} % (${value} objekter)`,
+                      fillStyle: dataSet.backgroundColor[i],
+                      strokeStyle: dataSet.backgroundColor[i],
+                      lineWidth: 1,
+                      hidden: false,
+                      index: i
+                    };
+                  });
+                }
+              }
+            }
+          }
+        }
+      });
+
+      document.getElementById("status").textContent =
+        "MMI-fordeling (100/200/300/350/400) + objekter uten MMI, " +
+        "basert på MMI i 0_Generell. Bruk «Fargelegg objekter» for å oppdatere farger i modellen.";
+    }
+
+    async function loadChart() {
+      const statusEl = document.getElementById("status");
+      const errorEl = document.getElementById("error");
+      errorEl.textContent = "";
+      statusEl.textContent =
+        "Henter objekter og leser MMI fra 0_Generell (100/200/300/350/400) + objekter uten MMI…";
+
+      try {
+        const { counts, selectionByMmi } = await getMmiData();
+        lastSelectionByMmi = selectionByMmi; // lagre for "Fargelegg objekter"
+
+        // Kun oppdatere diagrammet her – ingen farger i modellen ennå
+        renderPieChart(counts);
+      } catch (err) {
+        console.error(err);
+        errorEl.textContent =
+          "Feil ved lesing av MMI-data: " + (err.message || err);
+        statusEl.textContent = "Kunne ikke oppdatere diagram.";
+      }
+    }
+
+    // Knapper
+    document.getElementById("reloadButton").addEventListener("click", loadChart);
+
+    document.getElementById("colorizeButton").addEventListener("click", async () => {
+      if (!lastSelectionByMmi) {
+        document.getElementById("error").textContent =
+          "Ingen MMI-data er lastet ennå. Trykk først på «Hent fra modell».";
+        return;
+      }
+      await applyMmiColors(lastSelectionByMmi);
+      document.getElementById("status").textContent =
+        "Fargelegging oppdatert basert på sist innleste MMI-data.";
+    });
+
+    // Init – koble til Workspace
+    (async () => {
+      try {
+        await connectToWorkspace();
+      } catch (err) {
+        console.error(err);
+        document.getElementById("error").textContent =
+          "Klarte ikke å koble til Workspace API: " + (err.message || err);
+        document.getElementById("status").textContent = "Feil.";
+      }
+    })();
+  </script>
+</body>
+</html>
