@@ -101,7 +101,7 @@
     let lastSelectionByMmi = null;
 
     // Verdier vi bryr oss om
-    const VALID_MMI_VALUES = [100, 200, 300, 350, 400];
+    const VALID_MMI_VALUES = [100, 200, 300, 350, 375, 400];
 
     // Egen nøkkel for objekter uten MMI-verdi
     const NO_MMI_KEY = "noMmi";
@@ -112,6 +112,7 @@
       "200": "rgb(230, 150, 55)",   // 200
       "300": "rgb(250, 240, 80)",   // 300
       "350": "rgb(185, 175, 60)",   // 350
+      "375": "rgb(150,150,50)",     // 375
       "400": "rgb(55, 130, 70)",    // 400
       "noMmi": "rgb(254, 2, 225)"   // objekter uten MMI-verdi
     };
@@ -170,6 +171,7 @@
         200: 0,
         300: 0,
         350: 0,
+        375: 0,
         400: 0,
         [NO_MMI_KEY]: 0
       };
@@ -180,6 +182,7 @@
         200: {},
         300: {},
         350: {},
+        375: {},
         400: {},
         [NO_MMI_KEY]: {}
       };
@@ -204,7 +207,7 @@
         for (const obj of objectPropsArray) {
           const psets = obj.properties || [];
 
-          let assignedMmi = false; // true hvis objektet havner i 100/200/300/350/400
+          let assignedMmi = false; // true hvis objektet havner i 100/200/300/350/375/400
 
           for (const pset of psets) {
             if (assignedMmi) break;
@@ -305,7 +308,7 @@
       }
     }
 
-    // NY FUNKSJON: Tilbakestill farger i modellen
+    // Tilbakestill farger i modellen
     async function resetColors() {
       const statusEl = document.getElementById("status");
       const errorEl = document.getElementById("error");
@@ -424,7 +427,7 @@
       });
 
       document.getElementById("status").textContent =
-        "MMI-fordeling (100/200/300/350/400) + objekter uten MMI, " +
+        "MMI-fordeling (100/200/300/350/375/400) + objekter uten MMI, " +
         "basert på MMI i 0_Generell. Bruk «Fargelegg objekter» for å oppdatere farger i modellen.";
     }
 
@@ -433,7 +436,7 @@
       const errorEl = document.getElementById("error");
       errorEl.textContent = "";
       statusEl.textContent =
-        "Henter objekter og leser MMI fra 0_Generell (100/200/300/350/400) + objekter uten MMI…";
+        "Henter objekter og leser MMI fra 0_Generell (100/200/300/350/375/400) + objekter uten MMI…";
 
       try {
         const { counts, selectionByMmi } = await getMmiData();
