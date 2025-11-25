@@ -82,7 +82,6 @@
     <div class="title">MMI-kakediagram (MMI fra 0_Generell)</div>
     <button id="reloadButton">Hent fra modell</button>
     <button id="colorizeButton">Fargelegg objekter</button>
-    <!-- NY KNAPP -->
     <button id="resetColorsButton">Tilbakestill farger</button>
   </header>
 
@@ -380,6 +379,8 @@
           ]
         },
         options: {
+          // Deaktiver klikk-håndtering på selve kakediagrammet
+          onClick: () => {},
           plugins: {
             tooltip: {
               callbacks: {
@@ -462,7 +463,7 @@
         "Fargelegging oppdatert basert på sist innleste MMI-data.";
     });
 
-    // NY: Tilbakestill farger-knapp
+    // Tilbakestill farger-knapp
     document.getElementById("resetColorsButton").addEventListener("click", resetColors);
 
     // Init – koble til Workspace
