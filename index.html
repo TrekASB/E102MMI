@@ -157,7 +157,8 @@
      *  - selectionByMmi: { key → { modelId → [runtimeIds] } }
      *
      * Ser etter egenskap "MMI" i PropertySet "0_Generell".
-     * Objekter uten gyldig MMI-verdi havner i "noMmi".
+     * "Uten MMI" defineres eksplisitt som alle objekter som ikke har
+     * MMI ∈ {100, 200, 300, 350, 375, 400}.
      */
     async function getMmiData() {
       if (!API) throw new Error("API ikke tilkoblet.");
@@ -187,6 +188,9 @@
         [NO_MMI_KEY]: {}
       };
 
+      // Holder oversikt over ALLE objekter per modell
+      const allObjectIdsByModel = {};
+
       for (const modelObjects of modelObjectsList) {
         const modelId =
           modelObjects.modelId ||
@@ -199,6 +203,14 @@
         const runtimeIds = objs.map(o => o.id);
         if (!runtimeIds.length) continue;
 
+        // Registrer alle objekter i denne modellen
+        if (!allObjectIdsByModel[modelId]) {
+          allObjectIdsByModel[modelId] = new Set();
+        }
+        for (const id of runtimeIds) {
+          allObjectIdsByModel[modelId].add(id);
+        }
+
         const objectPropsArray = await API.viewer.getObjectProperties(
           modelId,
           runtimeIds
@@ -206,51 +218,69 @@
 
         for (const obj of objectPropsArray) {
           const psets = obj.properties || [];
-
-          let assignedMmi = false; // true hvis objektet havner i 100/200/300/350/375/400
+          let objMmi = null; // faktisk MMI-verdi for dette objektet (hvis gyldig)
 
           for (const pset of psets) {
-            if (assignedMmi) break;
-
-            // Sjekk at vi er i PropertySet "0_Generell"
             const psetNameNorm = normalizeName(pset.name || "");
             if (psetNameNorm !== "0_GENERELL") continue;
 
             const props = pset.properties || [];
             for (const p of props) {
-              const propName = p.name || "";
-              const propNameNorm = normalizeName(propName);
+              const propNameNorm = normalizeName(p.name || "");
 
               // Se etter egenskap "MMI" (i 0_Generell)
               if (propNameNorm !== "MMI") continue;
 
               const numVal = parseInt(p.value, 10);
               if (VALID_MMI_VALUES.includes(numVal)) {
-                counts[numVal] = (counts[numVal] || 0) + 1;
-
-                const perModel = selectionByMmi[numVal];
-                if (!perModel[modelId]) {
-                  perModel[modelId] = [];
-                }
-                perModel[modelId].push(obj.id); // runtimeId
-
-                assignedMmi = true;
+                objMmi = numVal;
               }
-
               // Vi bryter uansett ut etter første MMI i 0_Generell
               break;
             }
+
+            if (objMmi !== null) break; // fant gyldig MMI, trenger ikke sjekke flere Pset
           }
 
-          // Hvis objektet ikke fikk gyldig MMI-verdi → inn i "uten MMI"
-          if (!assignedMmi) {
-            counts[NO_MMI_KEY] = (counts[NO_MMI_KEY] || 0) + 1;
+          if (objMmi !== null) {
+            // Objektet har en gyldig MMI-verdi (100/200/300/350/375/400)
+            counts[objMmi] = (counts[objMmi] || 0) + 1;
 
-            const perModelNoMmi = selectionByMmi[NO_MMI_KEY];
-            if (!perModelNoMmi[modelId]) {
-              perModelNoMmi[modelId] = [];
+            const perModel = selectionByMmi[objMmi];
+            if (!perModel[modelId]) {
+              perModel[modelId] = [];
             }
-            perModelNoMmi[modelId].push(obj.id);
+            perModel[modelId].push(obj.id); // runtimeId
+          }
+          // Ingen "else" her – "uten MMI" beregnes eksplisitt etterpå
+        }
+      }
+
+      // Nå beregner vi "Uten MMI" som:
+      // Alle objekter MINUS de som har MMI ∈ VALID_MMI_VALUES
+      selectionByMmi[NO_MMI_KEY] = {};
+
+      for (const modelId of Object.keys(allObjectIdsByModel)) {
+        const allIds = allObjectIdsByModel[modelId];
+
+        // Lag et sett med alle runtimeIds som har gyldig MMI i denne modellen
+        const assigned = new Set();
+        for (const key of VALID_MMI_VALUES) {
+          const perModel = selectionByMmi[key][modelId];
+          if (perModel && perModel.length) {
+            for (const id of perModel) {
+              assigned.add(id);
+            }
+          }
+        }
+
+        for (const id of allIds) {
+          if (!assigned.has(id)) {
+            if (!selectionByMmi[NO_MMI_KEY][modelId]) {
+              selectionByMmi[NO_MMI_KEY][modelId] = [];
+            }
+            selectionByMmi[NO_MMI_KEY][modelId].push(id);
+            counts[NO_MMI_KEY] = (counts[NO_MMI_KEY] || 0) + 1;
           }
         }
       }
@@ -332,7 +362,7 @@
       }
     }
 
-    // NY: Highlight kun én MMI-gruppe (brukes ved klikk på kakediagram)
+    // Highlight kun én MMI-gruppe (brukes ved klikk på kakediagram)
     async function highlightMmiGroup(groupKey) {
       const statusEl = document.getElementById("status");
       const errorEl = document.getElementById("error");
